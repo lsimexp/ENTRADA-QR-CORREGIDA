@@ -252,21 +252,6 @@ $('#cam').onclick = async () => {
   }
 
   try {
-    // 3. Solicitar permiso previo de manera limpia para desbloquear etiquetas en Android/iOS
-    try {
-      const probe = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } }
-      });
-      probe.getTracks().forEach(t => t.stop());
-    } catch(errPrompt) {
-      if (/NotAllowed|Permission|denied/i.test(errPrompt.name || errPrompt.message)) {
-        throw new Error('Permiso de cámara denegado. Toca el candado junto a la URL del navegador y permite la cámara.');
-      }
-    }
-
-    // Actualizar lista de cámaras ahora que tenemos permiso
-    await detectarCamaras();
-
     scanner = new Html5Qrcode('reader', {
       formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
       verbose: false
@@ -282,21 +267,28 @@ $('#cam').onclick = async () => {
     };
 
     const selId = $('#camSelect').value;
-    let cameraArg;
 
+    // Intentar abrir cámara con prioridades progresivas
     if (selId) {
-      cameraArg = selId;
+      await scanner.start(selId, qrConfig, c => validar(c), () => {});
     } else {
-      cameraArg = { facingMode: 'environment' };
+      try {
+        await scanner.start({ facingMode: 'environment' }, qrConfig, c => validar(c), () => {});
+      } catch (errFacing) {
+        console.warn('Fallback a cámaras enumeradas:', errFacing);
+        const devs = await Html5Qrcode.getCameras();
+        if (devs && devs.length > 0) {
+          // La última cámara suele ser la trasera en Android
+          const backCam = devs.find(d => /back|rear|trasera|posterior/i.test(d.label)) || devs[devs.length - 1];
+          await scanner.start(backCam.id, qrConfig, c => validar(c), () => {});
+        } else {
+          await scanner.start({ facingMode: { ideal: 'environment' } }, qrConfig, c => validar(c), () => {});
+        }
+      }
     }
 
-    try {
-      await scanner.start(cameraArg, qrConfig, c => validar(c));
-    } catch (startErr) {
-      // Fallback a facingMode ideal si un ID de cámara falla
-      console.warn('Fallback a facingMode general:', startErr);
-      await scanner.start({ facingMode: { ideal: 'environment' } }, qrConfig, c => validar(c));
-    }
+    // Actualizar lista de cámaras en segundo plano ahora que la cámara está activa
+    detectarCamaras().catch(() => {});
 
     $('#cam').textContent = 'Parar cámara';
     ULTIMO = 'cam';
