@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Escáner de entradas</title>
+<style>
+:root{--blue:#0078D4;--blue-d:#106EBE;--bg:#F3F2F1;--ink:#201F1E;--mut:#605E5C;--ok:#107C10;--ko:#D13438}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif;padding:16px max(16px,env(safe-area-inset-right)) 24px}
+main{max-width:520px;margin:0 auto}
+.card{background:#fff;border-radius:4px;padding:20px;margin-bottom:16px;box-shadow:0 1.6px 3.6px rgba(0,0,0,.13)}
+h1{font-size:22px;font-weight:600;margin:0 0 4px}.sub{color:var(--mut);font-size:14px;margin:0 0 8px}
+label{display:block;font-weight:600;font-size:14px;margin:14px 0 4px}
+input,select{width:100%;font:inherit;padding:9px 10px;min-height:44px;border:1px solid #8A8886;border-radius:2px;background:#fff}
+input:focus,select:focus{outline:none;border-color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue)}
+button{font:inherit;font-weight:600;border:1px solid transparent;border-radius:2px;padding:10px 16px;min-height:44px;background:var(--blue);color:#fff;width:100%;margin-top:12px;cursor:pointer}
+button:hover{background:var(--blue-d)}button:disabled{background:#F3F2F1;color:#A19F9D;cursor:default}
+.b2{background:#fff;color:var(--ink);border-color:#8A8886}.b2:hover{background:#F3F2F1}
+.msg{color:var(--ko);font-weight:600;font-size:14px;min-height:20px;margin:10px 0 0}.msg.ok{color:var(--ok)}
+#reader{background:#201F1E;min-height:260px;border-radius:2px;overflow:hidden;position:relative}
+.hide{display:none!important}
+.row{display:flex;gap:10px}.row>input{flex:1}.row>button{flex:0 0 100px;margin:0}
+#res{position:fixed;inset:0;z-index:99;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;color:#fff;cursor:pointer}
+#res.ok{background:#107C10}#res.ko{background:#D13438}#res h1{font-size:38px;font-weight:700;margin:0 0 8px}#res p{font-size:19px;margin:0 0 6px}.big{font-size:90px;line-height:1;margin-bottom:8px}
+.badge{display:inline-block;padding:2px 8px;font-size:12px;border-radius:2px;font-weight:600;margin-top:4px}
+.badge-ok{background:#DFF6DD;color:#107C10}
+.badge-warn{background:#FFF4CE;color:#795B00}
+</style>
+</head>
+<body>
+<main>
+  <!-- VISTA 1: LOGIN -->
+  <div class="card" id="vLogin">
+    <h1>Escáner de entradas</h1>
+    <p class="sub">Acceso del personal de puerta y administradores.</p>
+    <div id="apiBox">
+      <label for="api">Dirección de Google Apps Script (termina en /exec)</label>
+      <input id="api" inputmode="url" autocapitalize="none" autocorrect="off" placeholder="https://script.google.com/macros/s/.../exec">
+    </div>
+    <label for="u">Usuario</label>
+    <input id="u" autocapitalize="none" autocorrect="off" autocomplete="username" placeholder="ej. luis">
+    <label for="p">Contraseña</label>
+    <input id="p" type="password" autocomplete="current-password">
+    <p class="msg" id="le"></p>
+    <button id="lb">Entrar</button>
+  </div>
+
+  <!-- VISTA 2: ESCÁNER -->
+  <div class="card hide" id="vScan">
+    <h1 id="quien"></h1>
+    <p class="sub" id="puerta"></p>
+
+    <!-- Selector de cámara (si el móvil tiene varias) -->
+    <div id="camSelectBox" class="hide" style="margin-bottom:12px">
+      <label for="camSelect" style="margin-top:0">Seleccionar cámara:</label>
+      <select id="camSelect"></select>
+    </div>
+
+    <!-- Visor de cámara -->
+    <div id="reader"></div>
+    <div id="rtmp" class="hide"></div>
+    
+    <p class="msg" id="cm"></p>
+    
+    <!-- Botones de cámara -->
+    <button id="cam">Activar cámara</button>
+    <button id="torchBtn" class="b2 hide" style="margin-top:8px">Linterna: Desactivada</button>
+    
+    <!-- Escanear con foto (plan de rescate que siempre funciona) -->
+    <input type="file" id="fotoIn" accept="image/*" capture="environment" class="hide">
+    <button class="b2" id="foto">Escanear con foto</button>
+    
+    <!-- Código manual -->
+    <p class="sub" style="margin-top:16px">O escribe el código de 6 dígitos:</p>
+    <div class="row">
+      <input id="man" inputmode="numeric" placeholder="000000" maxlength="12">
+      <button class="b2" id="manb">Validar</button>
+    </div>
+    
+    <button class="b2" id="out" style="margin-top:20px">Cerrar sesión</button>
+  </div>
+</main>
+
+<!-- PANTALLA COMPLETA DE RESULTADO (VERDE / ROJO) -->
+<div id="res" class="hide"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+
+let API = localStorage.getItem('api') || '';
+let S = null;
+let scanner = null;
+let busy = false;
+let ULTIMO = '';
+let currentStreamTrack = null;
+let torchOn = false;
+
+try {
+  S = JSON.parse(sessionStorage.getItem('s') || 'null');
+} catch(e) {}
+
+if (API) {
+  $('#api').value = API;
+  $('#apiBox').classList.add('hide');
+}
+
+// Envío a Google Apps Script evitando preflight CORS (usa text/plain)
+async function api(accion, datos) {
+  if (!API) throw new Error('Falta la URL de la aplicación web.');
+  const r = await fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(Object.assign({ accion }, datos))
+  });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'Error en el servidor');
+  return j.data;
+}
+
+function vista() {
+  $('#vLogin').classList.toggle('hide', !!S);
+  $('#vScan').classList.toggle('hide', !S);
+  if (S) {
+    $('#quien').textContent = S.usuario;
+    $('#puerta').textContent = 'Validando entradas en: ' + (S.puerta || 'Administración');
+    detectarCamaras();
+  }
+}
+vista();
+
+// Audio Beeps nativos sin librerías externas
+function beep(ok) {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    if (ok) {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.16);
+    } else {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.26);
+    }
+  } catch(x) {}
+}
+
+// LOGIN
+$('#lb').onclick = async () => {
+  $('#le').textContent = '';
+  const a = $('#api').value.trim();
+  if (a) API = a;
+  if (!/^https:\/\/script\.google\.com\/.+\/exec/.test(API)) {
+    $('#apiBox').classList.remove('hide');
+    return $('#le').textContent = 'Pega la dirección de la aplicación (https://script.google.com/…/exec).';
+  }
+  $('#lb').disabled = true;
+  try {
+    S = await api('login', { usuario: $('#u').value.trim(), clave: $('#p').value });
+    localStorage.setItem('api', API);
+    sessionStorage.setItem('s', JSON.stringify(S));
+    $('#p').value = '';
+    vista();
+  } catch(e) {
+    const err = String(e.message || e);
+    $('#le').textContent = err === 'Failed to fetch'
+      ? 'No se pudo conectar. Verifica que la WebApp de Google Apps Script esté publicada con acceso para "Cualquiera" (Anyone).'
+      : err;
+  } finally {
+    $('#lb').disabled = false;
+  }
+};
+
+$('#p').onkeydown = e => { if (e.key === 'Enter') $('#lb').click(); };
+
+// LOGOUT
+$('#out').onclick = async () => {
+  await parar();
+  S = null;
+  sessionStorage.removeItem('s');
+  vista();
+};
+
+// DETECCIÓN INTELIGENTE DE CÁMARAS
+async function detectarCamaras() {
+  const sel = $('#camSelect');
+  sel.innerHTML = '';
+  try {
+    const devices = await Html5Qrcode.getCameras();
+    if (devices && devices.length > 1) {
+      devices.forEach((dev, idx) => {
+        const opt = document.createElement('option');
+        opt.value = dev.id;
+        const lbl = dev.label || ('Cámara ' + (idx + 1));
+        opt.textContent = lbl;
+        if (/back|rear|trasera|posterior|environment/i.test(lbl)) {
+          opt.selected = true;
+        }
+        sel.appendChild(opt);
+      });
+      $('#camSelectBox').classList.remove('hide');
+    } else {
+      $('#camSelectBox').classList.add('hide');
+    }
+  } catch (x) {
+    $('#camSelectBox').classList.add('hide');
+  }
+}
+
+// DETENER CÁMARA
+async function parar() {
+  if (scanner) {
+    try { await scanner.stop(); } catch(e) {}
+    try { await scanner.clear(); } catch(e) {}
+    scanner = null;
+  }
+  currentStreamTrack = null;
+  $('#cam').textContent = 'Activar cámara';
+  $('#torchBtn').classList.add('hide');
+}
+
+// ACTIVAR CÁMARA (ROBUSTO CON MÚLTIPLES FALLBACKS)
+$('#cam').onclick = async () => {
+  if (scanner) return parar();
+  $('#cm').textContent = '';
+  $('#cm').className = 'msg';
+
+  // 1. Verificar contexto seguro (HTTPS)
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+    $('#cm').textContent = 'La cámara requiere conexión HTTPS segura. Despliega en GitHub Pages.';
+    return;
+  }
+
+  // 2. Comprobar soporte de navegador
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $('#cm').textContent = 'Tu navegador no soporta acceso directo a la cámara. Usa "Escanear con foto".';
+    return;
+  }
+
+  try {
+    // 3. Solicitar permiso previo de manera limpia para desbloquear etiquetas en Android/iOS
+    try {
+      const probe = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }
+      });
+      probe.getTracks().forEach(t => t.stop());
+    } catch(errPrompt) {
+      if (/NotAllowed|Permission|denied/i.test(errPrompt.name || errPrompt.message)) {
+        throw new Error('Permiso de cámara denegado. Toca el candado junto a la URL del navegador y permite la cámara.');
+      }
+    }
+
+    // Actualizar lista de cámaras ahora que tenemos permiso
+    await detectarCamaras();
+
+    scanner = new Html5Qrcode('reader', {
+      formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+      verbose: false
+    });
+
+    const qrConfig = {
+      fps: 12,
+      qrbox: function(w, h) {
+        const edge = Math.floor(Math.min(w, h) * 0.72);
+        return { width: Math.max(edge, 160), height: Math.max(edge, 160) };
+      },
+      aspectRatio: 1.0
+    };
+
+    const selId = $('#camSelect').value;
+    let cameraArg;
+
+    if (selId) {
+      cameraArg = selId;
+    } else {
+      cameraArg = { facingMode: 'environment' };
+    }
+
+    try {
+      await scanner.start(cameraArg, qrConfig, c => validar(c));
+    } catch (startErr) {
+      // Fallback a facingMode ideal si un ID de cámara falla
+      console.warn('Fallback a facingMode general:', startErr);
+      await scanner.start({ facingMode: { ideal: 'environment' } }, qrConfig, c => validar(c));
+    }
+
+    $('#cam').textContent = 'Parar cámara';
+    ULTIMO = 'cam';
+
+    // Comprobar si soporta Linterna (Torch)
+    try {
+      const videoEl = document.querySelector('#reader video');
+      if (videoEl && videoEl.srcObject) {
+        const track = videoEl.srcObject.getVideoTracks()[0];
+        if (track) {
+          currentStreamTrack = track;
+          const caps = track.getCapabilities ? track.getCapabilities() : {};
+          if (caps.torch) {
+            $('#torchBtn').classList.remove('hide');
+            $('#torchBtn').textContent = 'Linterna: Apagada';
+            torchOn = false;
+          }
+        }
+      }
+    } catch(eTorch) {}
+
+  } catch(e) {
+    scanner = null;
+    const n = String(e && (e.name || e.message || e));
+    if (/NotAllowed|Permission|denied/i.test(n)) {
+      $('#cm').textContent = 'Permiso denegado. Toca el icono de permisos junto a la barra de direcciones, activa la Cámara y recarga.';
+    } else if (/Overconstrained|NotFound/i.test(n)) {
+      $('#cm').textContent = 'No se encontró la cámara trasera. Intenta seleccionar otra en el desplegable o usa "Escanear con foto".';
+    } else {
+      $('#cm').textContent = 'No se pudo abrir la cámara (' + n + '). Usa "Escanear con foto".';
+    }
+  }
+};
+
+// LINTERNA / TORCH
+$('#torchBtn').onclick = async () => {
+  if (!currentStreamTrack) return;
+  try {
+    torchOn = !torchOn;
+    await currentStreamTrack.applyConstraints({
+      advanced: [{ torch: torchOn }]
+    });
+    $('#torchBtn').textContent = torchOn ? 'Linterna: Encendida' : 'Linterna: Apagada';
+  } catch(e) {
+    $('#torchBtn').classList.add('hide');
+  }
+};
+
+// ESCANEAR CON FOTO (CÁMARA DEL MÓVIL)
+$('#foto').onclick = () => $('#fotoIn').click();
+$('#fotoIn').onchange = async ev => {
+  const f = ev.target.files[0];
+  ev.target.value = '';
+  if (!f) return;
+  ULTIMO = 'foto';
+  $('#cm').textContent = 'Analizando imagen...';
+  $('#cm').className = 'msg ok';
+  try {
+    const qrHref = await new Html5Qrcode('rtmp').scanFile(f, false);
+    $('#cm').textContent = '';
+    validar(qrHref);
+  } catch(e) {
+    $('#cm').className = 'msg';
+    $('#cm').textContent = 'No se detectó ningún código QR en la foto. Acércate más, enfoca bien y vuelve a intentarlo.';
+  }
+};
+
+// VALIDACIÓN MANUAL
+$('#manb').onclick = () => {
+  ULTIMO = '';
+  const v = $('#man').value.trim();
+  $('#man').value = '';
+  if (!v) return;
+  validar(v);
+};
+$('#man').onkeydown = e => { if (e.key === 'Enter') $('#manb').click(); };
+
+// VALIDACIÓN DE ENTRADA CON FEEDBACK PANTALLA COMPLETA
+async function validar(codigo) {
+  if (busy) return;
+  busy = true;
+
+  try { if (scanner) scanner.pause(true); } catch(e) {}
+
+  let r;
+  try {
+    r = await api('verificar', { token: S.token, codigo });
+  } catch(e) {
+    r = { ok: false, motivo: e.message };
+    if (/Sesión caducada/i.test(e.message)) {
+      S = null;
+      sessionStorage.removeItem('s');
+    }
+  }
+
+  beep(r.ok);
+
+  const o = $('#res');
+  o.className = r.ok ? 'ok' : 'ko';
+  o.textContent = '';
+  o.append(el('div', 'big', r.ok ? '✓' : '✕'));
+  o.append(el('h1', '', r.ok ? 'ACCESO PERMITIDO' : 'ACCESO DENEGADO'));
+
+  if (r.ok) {
+    o.append(el('p', '', r.nombre));
+    o.append(el('p', '', r.puerta));
+  } else {
+    o.append(el('p', '', r.motivo || 'Entrada inválida'));
+    if (r.nombre) o.append(el('p', '', r.nombre));
+    if (r.detalle) o.append(el('p', '', r.detalle));
+  }
+
+  const q = el('p', '', 'Toca la pantalla para continuar');
+  q.style.cssText = 'font-size:14px;opacity:.8;margin-top:24px;border:1px solid rgba(255,255,255,0.4);padding:6px 14px;border-radius:2px';
+  o.append(q);
+
+  try {
+    if (navigator.vibrate) navigator.vibrate(r.ok ? 120 : [200, 80, 200]);
+  } catch(vErr) {}
+}
+
+$('#res').onclick = () => {
+  $('#res').className = 'hide';
+  busy = false;
+  if (!S) vista();
+  try { if (scanner) scanner.resume(); } catch(e) {}
+  if (S && ULTIMO === 'foto') $('#fotoIn').click();
+};
+</script>
+</body>
+</html>
